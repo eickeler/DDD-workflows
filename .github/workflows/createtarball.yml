@@ -1,22 +1,9 @@
-name: Nightly source tarball (DDD)
-
-on:
-  workflow_run:
-    workflows: ["Mirror DDD to GitHub"]
-    types: [completed]
-  workflow_dispatch:
-
-
-permissions:
-  contents: write
-
 jobs:
   nightly:
-    #if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
       MIRROR_REPO: https://github.com/eickeler/ddd.git
-
     steps:
 
       - name: Checkout latest master
@@ -33,18 +20,24 @@ jobs:
         working-directory: ddd
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y build-essential autoconf make libmotif-dev texinfo flex bison \ 
-              libfreetype-dev libxft-dev libfontconfig-dev libncurses-dev gawk libtool automake \
-              info gdb fonts-liberation fig2dev texinfo
+          sudo apt-get install -y \
+            build-essential autoconf automake libtool make \
+            libmotif-dev texinfo flex bison \
+            libfreetype-dev libxft-dev libfontconfig-dev libncurses-dev \
+            gawk gdb fonts-liberation fig2dev
           autoreconf -ifv
           ./configure
-          make 
+          make -j"$(nproc)"
+
 
       - name: Create source tarball
 
         working-directory: ddd
         run: |
           make dist
+          # Rename/move to repo root with nightly name
+          TARBALL=$(ls ddd-*.tar.gz | head -n1)
+          mv "$TARBALL" "../ddd-nightly-${DATE}.tar.gz"
 
 
       - name: Publish nightly release (in this repo)
