@@ -33,8 +33,8 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y \
-            build-essential autoconf automake libtool make \
-            libmotif-dev texinfo flex bison libtinyxml2-dev libxpm-dev \
+            build-essential autoconf automake libtool make libxpm-dev \
+            libmotif-dev texinfo flex bison libtinyxml2-dev libxext-dev \
             libfreetype-dev libxft-dev libfontconfig-dev libncurses-dev \
             gawk gdb fonts-liberation fig2dev texlive 
           autoreconf -ifv
