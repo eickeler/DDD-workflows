@@ -51,7 +51,6 @@ jobs:
           # Rename/move to repo root with nightly name
           TARBALL=$(ls ddd-*.tar.gz | head -n1)
           mv "$TARBALL" "../ddd-nightly-${DATE}.tar.gz"
-          ls -l ..
 
 
       - name: Publish nightly release (in this repo)
@@ -61,7 +60,6 @@ jobs:
           OWNER_REPO: ${{ github.repository }}  # e.g., eickeler/ddd-mirror-automation
         run: |
           TAG="nightly-${DATE}"
-          ls -l
           # Create/edit release pointing to this repo’s current commit (or omit --target)
           gh release create "$TAG" --repo "$OWNER_REPO" --title "DDD Nightly $DATE" --prerelease --target "$GITHUB_SHA" || \
           gh release edit "$TAG" --repo "$OWNER_REPO" --title "DDD Nightly $DATE" --prerelease
