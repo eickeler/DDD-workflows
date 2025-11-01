@@ -1,9 +1,9 @@
 name: Nightly source tarball (DDD)
 
 on:
-#  workflow_run:
-#    workflows: ["Mirror DDD to GitHub"]
-#    types: [completed]
+  workflow_run:
+    workflows: ["Mirror DDD to GitHub"]
+    types: [completed]
   workflow_dispatch:
 
 
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   nightly:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    #if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
       MIRROR_REPO: https://github.com/eickeler/ddd.git
