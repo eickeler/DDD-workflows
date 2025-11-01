@@ -1,0 +1,39 @@
+name: Mirror DDD to GitHub
+
+on:
+  schedule:
+
+    - cron: "0 2 * * *"     # nightly 02:00 UTC
+
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM: https://git.savannah.gnu.org/git/ddd.git
+      TARGET:   eickeler/ddd      # mirror repo on GitHub
+
+    steps:
+
+      - name: Tolerate slow links
+
+        run: |
+          git config --global http.lowSpeedLimit 1000   # bytes/sec
+          git config --global http.lowSpeedTime 60      # seconds
+          git config --global fetch.prune true
+
+
+      - name: Clone upstream as mirror
+
+        run: git clone --mirror "$UPSTREAM" upstream.git
+
+
+      - name: Push to GitHub mirror
+
+        working-directory: upstream.git
+        env:
+          PAT: ${{ secrets.MIRROR_PUSH_TOKEN }}   # fine-grained PAT
+        run: |
+          git remote add github "https://x-access-token:${PAT}@github.com/${{ env.TARGET }}.git"
+          git push --mirror github
