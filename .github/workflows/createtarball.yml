@@ -1,10 +1,11 @@
 name: Nightly source tarball (DDD)
 
-#on:
+on:
 #  workflow_run:
 #    workflows: ["Mirror DDD to GitHub"]
 #    types: [completed]
-#  workflow_dispatch:
+  workflow_dispatch:
+
 
 permissions:
   contents: write
