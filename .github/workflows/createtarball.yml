@@ -1,4 +1,4 @@
-name: DDD Nightly source tarball
+name: Create source tarball
 
 on:
   workflow_call:
