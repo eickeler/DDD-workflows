@@ -10,6 +10,8 @@ on:
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }} 
     env:
       UPSTREAM: https://git.savannah.gnu.org/git/ddd.git
       TARGET:   eickeler/DDD      # mirror repo on GitHub
