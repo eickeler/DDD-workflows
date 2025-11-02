@@ -69,3 +69,5 @@ jobs:
     needs: mirror
     if: needs.mirror.outputs.changed == 'true'  # guard at job level
     uses: ./.github/workflows/createtarball.yml
+    permissions:
+      contents: write
