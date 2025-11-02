@@ -11,8 +11,8 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     env:
-      UPSTREAM: https://git.savannah.gnu.org/git/DDD.git
-      TARGET:   eickeler/ddd      # mirror repo on GitHub
+      UPSTREAM: https://git.savannah.gnu.org/git/ddd.git
+      TARGET:   eickeler/DDD      # mirror repo on GitHub
 
     steps:
 
