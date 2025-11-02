@@ -4,7 +4,7 @@
 This project provides:
 
 - A public GitHub mirror of GNU DDD (Data Display Debugger)
-- Nightly source tarballs for easier access and testing (todo)
+- Nightly source tarballs for easier access and testing
 
 DDD is a graphical front-end for command-line debuggers like GDB.
 
@@ -29,7 +29,7 @@ DDD is a graphical front-end for command-line debuggers like GDB.
 
 
 - Browse or clone the code:
-  - GitHub mirror: https://github.com/eickeler/ddd (default branch: `master`)
+  - GitHub mirror: https://github.com/eickeler/DDD (default branch: `master`)
 
 - Download nightly source:
   - Go to Releases on this repo: https://github.com/eickeler/ddd-mirror-automation/releases
