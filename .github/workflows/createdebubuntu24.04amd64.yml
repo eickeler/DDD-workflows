@@ -22,8 +22,7 @@ jobs:
           cd ddd
           echo "COMMIT=$(git rev-parse HEAD)" >> $GITHUB_ENV
           echo "DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-          echo "VERSION=0:trunk+git${DATE}-1" >> $GITHUB_ENV
-
+          echo "VERSION=3.4.1:trunk+git${DATE}-1" >> $GITHUB_ENV
 
 
       - name: Install build dependencies
