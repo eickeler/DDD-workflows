@@ -1,0 +1,67 @@
+name: Weekly DDD Website Mirror
+ 
+on:
+  schedule:
+    # Every Monday at 03:17 UTC (deliberately not a full hour, to avoid load spikes)
+    - cron: '17 3 * * 1'
+  workflow_dispatch: {}  # allows manual trigger via the Actions UI
+ 
+env:
+  SOURCE_URL: https://www.gnu.org/software/ddd/
+  TARGET_REPO: eickeler/DDD-website-mirror
+  TARGET_BRANCH: main
+ 
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          ref: ${{ env.TARGET_BRANCH }}
+          token: ${{ secrets.WEBSITE_MIRROR_TOKEN }}
+          path: target-repo
+          fetch-depth: 0
+ 
+      - name: Create wget mirror of the website
+        run: |
+          mkdir -p mirror-tmp
+          wget \
+            --mirror \
+            --no-parent \
+            --page-requisites \
+            --convert-links \
+            --adjust-extension \
+            --no-host-directories \
+            --directory-prefix=mirror-tmp \
+            --wait=1 \
+            --random-wait \
+            -e robots=off \
+            "${SOURCE_URL}"
+ 
+      - name: Remove old content (except .git)
+        run: |
+          cd target-repo
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+ 
+      - name: Copy in new mirror content
+        run: |
+          cp -a mirror-tmp/. target-repo/
+ 
+      - name: Commit and push changes
+        run: |
+          cd target-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+ 
+          git add -A
+ 
+          if git diff --cached --quiet; then
+            echo "No changes to the website since the last run."
+            exit 0
+          fi
+ 
+          COMMIT_DATE=$(date -u +"%Y-%m-%d")
+          git commit -m "Website mirror from ${COMMIT_DATE}"
+          git push origin "${TARGET_BRANCH}"
