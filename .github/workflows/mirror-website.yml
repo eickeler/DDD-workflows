@@ -25,19 +25,25 @@ jobs:
           fetch-depth: 0
  
       - name: Create wget mirror of the website
+        timeout-minutes: 20
         run: |
           mkdir -p mirror-tmp
           wget \
-            --mirror \
+            --recursive \
+            --level=2 \
             --no-parent \
             --page-requisites \
             --convert-links \
             --adjust-extension \
             --no-host-directories \
             --directory-prefix=mirror-tmp \
+            --timeout=20 \
+            --tries=2 \
+            --waitretry=5 \
             --wait=1 \
             --random-wait \
             -e robots=off \
+            --no-verbose \
             "${SOURCE_URL}"
  
       - name: Remove old content (except .git)
