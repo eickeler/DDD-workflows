@@ -36,27 +36,30 @@ jobs:
           fetch-depth: 0
  
       - name: Create wget mirror of the website
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           mkdir -p mirror-tmp
+
           wget \
             --inet4-only \
             --recursive \
             --level=2 \
             --no-parent \
+            --domains=www.gnu.org \
             --page-requisites \
             --convert-links \
             --adjust-extension \
             --no-host-directories \
             --directory-prefix=mirror-tmp \
-            --timeout=20 \
-            --tries=2 \
-            --waitretry=5 \
-            --wait=1 \
+            --timeout=60 \
+            --tries=5 \
+            --waitretry=15 \
+            --wait=2 \
             --random-wait \
+            --user-agent="DDD-website-mirror/1.0 (GitHub Actions; contact: eickeler@gnu.org)" \
             -e robots=off \
-            --no-verbose \
             "${SOURCE_URL}"
+
  
       - name: Remove old content (except .git)
         run: |
