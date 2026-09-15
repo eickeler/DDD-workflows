@@ -29,6 +29,7 @@ jobs:
         run: |
           mkdir -p mirror-tmp
           wget \
+            --inet4-only \
             --recursive \
             --level=2 \
             --no-parent \
