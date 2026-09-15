@@ -15,11 +15,17 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     steps:
-      - name: Test GNU connectivity
+      - name: Diagnose connectivity
         run: |
-          curl -4 -I --connect-timeout 20 "${SOURCE_URL}"
-          curl -6 -I --connect-timeout 20 "${SOURCE_URL}" || true
-          
+          getent ahostsv4 www.gnu.org
+          curl -4 -vI \
+            --connect-timeout 30 \
+            --max-time 60 \
+            --retry 3 \
+            --retry-all-errors \
+            -A "DDD-website-mirror/1.0 (GitHub Actions; contact: eickeler@gnu.org)" \
+            "${SOURCE_URL}"
+            
       - name: Checkout target repository
         uses: actions/checkout@v5
         with:
