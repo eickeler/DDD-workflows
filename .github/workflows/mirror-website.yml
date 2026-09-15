@@ -69,7 +69,7 @@ jobs:
  
       - name: Copy in new mirror content
         run: |
-          cp -a mirror-tmp/. target-repo/
+          cp -a mirror-tmp/software/ddd/. target-repo/
  
       - name: Commit and push changes
         run: |
