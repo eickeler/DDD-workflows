@@ -43,7 +43,7 @@ jobs:
           wget \
             --inet4-only \
             --recursive \
-            --level=2 \
+            --level=3 \
             --no-parent \
             --domains=www.gnu.org \
             --page-requisites \
