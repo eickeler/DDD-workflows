@@ -34,8 +34,7 @@ jobs:
             build-essential autoconf automake libtool libxpm-dev \
             libmotif-dev texinfo flex bison libtinyxml2-dev libxext-dev \
             libfreetype-dev libxft-dev libfontconfig-dev libncurses-dev \
-            gawk gdb fonts-liberation fig2dev texlive \
-            debhelper devscripts dh-make gzip
+            gawk 
 
 
 
@@ -78,7 +77,7 @@ jobs:
           Section: devel
           Priority: optional
           Architecture: amd64
-          Depends: ${DEPS}, xterm, gdb, gnuplot
+          Depends: ${DEPS}, gdb, gnuplot
           Recommends: xterm, info, fonts-liberation
           Maintainer: DDD Maintainers (Michael Eager & Stefan Eickeler) <ddd@gnu.org>
           Description: Data Display Debugger - graphical debugger frontend
@@ -96,10 +95,11 @@ jobs:
       - name: Test package
 
         run: |
-          sudo dpkg -i "ddd-nightly-${DATE}_${VERSION}_amd64.deb" || true
-          sudo apt-get install -f -y
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y "./ddd-nightly-${DATE}_${VERSION}_amd64.deb"
+          dpkg-query -W -f='${Status}\n' ddd | grep -qx 'install ok installed'
           ddd --help
-
 
 
       - name: Publish nightly release
