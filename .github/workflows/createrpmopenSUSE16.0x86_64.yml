@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          etc/prereq
+          etc/prereq -maintainer
           autoreconf -ifv
           ./configure --prefix=/usr
           make
