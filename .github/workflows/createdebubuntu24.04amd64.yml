@@ -53,6 +53,7 @@ jobs:
 
         working-directory: ddd
         run: |
+          set -euo pipefail
           mkdir -p debian/ddd/DEBIAN
           mkdir -p debian/ddd/usr
           
@@ -65,11 +66,34 @@ jobs:
           # gzip .info files
           gzip debian/ddd/usr/share/ddd/info/ddd*info*
           
-          # Let dpkg-shlibdeps determine the actual runtime library dependencies.
-          DEPS="$(
-            dpkg-shlibdeps -O debian/ddd/usr/bin/ddd \
-              | sed -n 's/^shlibs:Depends=//p'
+          # dpkg-shlibdeps requires this packaging metadata.
+          cat > debian/control <<'EOF'
+          Source: ddd
+          Section: devel
+          Priority: optional
+          Maintainer: DDD Maintainers <ddd@gnu.org>
+          Standards-Version: 4.7.0
+
+          Package: ddd
+          Architecture: any
+          Depends: ${shlibs:Depends}
+          Description: Data Display Debugger
+           Graphical front-end for command-line debuggers.
+          EOF
+
+          # Determine runtime library dependencies.
+          SHLIB_OUTPUT="$(
+            dpkg-shlibdeps -O -e debian/ddd/usr/bin/ddd
           )"
+
+          DEPS="${SHLIB_OUTPUT#shlibs:Depends=}"
+
+          if [[ "$SHLIB_OUTPUT" == "$DEPS" || -z "$DEPS" ]]; then
+            echo "Failed to determine shared-library dependencies" >&2
+            exit 1
+          fi
+
+          echo "Detected dependencies: $DEPS"
           
           # Create control file
           cat > debian/ddd/DEBIAN/control <<EOF
