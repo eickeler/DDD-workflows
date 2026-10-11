@@ -42,6 +42,7 @@ jobs:
 
         working-directory: ddd
         run: |
+          etc/prereq
           autoreconf -ifv
           ./configure --prefix=/usr
           make
