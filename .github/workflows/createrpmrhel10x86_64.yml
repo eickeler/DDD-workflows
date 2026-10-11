@@ -1,0 +1,303 @@
+name: Create nightly .rpm package for RHEL 10
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    container:
+      image: almalinux:10
+
+    env:
+      MIRROR_REPO: https://github.com/eickeler/DDD.git
+
+    steps:
+      - name: Install repositories and build dependencies
+        run: |
+          set -euo pipefail
+
+          dnf -y install dnf-plugins-core
+
+          # Development packages needed by DDD are provided by CRB.
+          dnf config-manager --set-enabled crb
+
+          # Motif and gnuplot are provided by EPEL.
+          if ! dnf -y install epel-release; then
+            dnf -y install \
+              https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+          fi
+
+          dnf -y makecache
+
+          dnf -y install \
+            git \
+            gcc \
+            gcc-c++ \
+            make \
+            autoconf \
+            automake \
+            libtool \
+            rpm-build \
+            texinfo \
+            flex \
+            bison \
+            gawk \
+            gzip \
+            tar \
+            which \
+            findutils \
+            diffutils \
+            file \
+            motif-devel \
+            libX11-devel \
+            libXpm-devel \
+            libXext-devel \
+            libXt-devel \
+            libXmu-devel \
+            libXft-devel \
+            freetype-devel \
+            fontconfig-devel \
+            ncurses-devel \
+            tinyxml2-devel \
+            gdb \
+            gnuplot
+
+      - name: Checkout latest master
+        run: |
+          set -euo pipefail
+
+          git clone --depth 1 --branch master "$MIRROR_REPO" ddd
+          cd ddd
+
+          DATE="$(date +%Y%m%d)"
+          RPM_VERSION="3.5.0~rcX+git${DATE}"
+          PACKAGE_VERSION="${RPM_VERSION}+rhel10"
+          RPM_FILE="ddd-nightly-${DATE}_${PACKAGE_VERSION}_x86_64.rpm"
+
+          {
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "DATE=$DATE"
+            echo "RPM_VERSION=$RPM_VERSION"
+            echo "PACKAGE_VERSION=$PACKAGE_VERSION"
+            echo "RPM_FILE=$RPM_FILE"
+          } >> "$GITHUB_ENV"
+
+      - name: Build binaries
+        working-directory: ddd
+        run: |
+          set -euo pipefail
+
+          etc/prereq -maintainer
+          autoreconf -ifv
+          ./configure --prefix=/usr
+          make -j"$(nproc)"
+
+      - name: Create RPM package
+        working-directory: ddd
+        run: |
+          set -euo pipefail
+
+          STAGE="$(pwd)/stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+
+          make install DESTDIR="$STAGE"
+
+          # Remove the DDD version from the installed data directory.
+          shopt -s nullglob
+          DATA_DIRS=("$STAGE"/usr/share/ddd-*)
+
+          if (( ${#DATA_DIRS[@]} != 1 )); then
+            echo "Expected one versioned DDD data directory, found:" >&2
+            printf '  %s\n' "${DATA_DIRS[@]}" >&2
+            exit 1
+          fi
+
+          mv "${DATA_DIRS[0]}" "$STAGE/usr/share/ddd"
+
+          cat > ddd.spec <<'EOF'
+          %global debug_package %{nil}
+          %global _build_id_links none
+
+          Name:           ddd
+          Version:        %{pkgver}
+          Release:        1.el10
+          Summary:        Data Display Debugger graphical frontend
+          License:        GPL-3.0-or-later
+          URL:            https://www.gnu.org/software/ddd/
+          Distribution:   RHEL 10 compatible (built on AlmaLinux 10)
+          Vendor:         DDD nightly builds
+
+          Requires:       gdb
+          Requires:       gnuplot
+          Recommends:     xterm
+          Recommends:     info
+          Recommends:     liberation-fonts
+
+          %description
+          DDD is a graphical front-end for command-line debuggers such as GDB.
+          It provides source-level debugging and interactive graphical data
+          displays for complex data structures and images.
+
+          %install
+          rm -rf %{buildroot}
+          mkdir -p %{buildroot}
+          cp -a %{stage}/. %{buildroot}/
+
+          rm -f \
+            %{buildroot}/usr/share/info/dir \
+            %{buildroot}/usr/lib/charset.alias
+
+          # Compress the DDD Info files.
+          if [ -d %{buildroot}/usr/share/ddd/info ]; then
+            find %{buildroot}/usr/share/ddd/info \
+              -type f \
+              ! -name '*.gz' \
+              -exec gzip -9n {} +
+          fi
+
+          # Compress manual pages before creating the RPM file list.
+          if [ -d %{buildroot}/usr/share/man ]; then
+            find %{buildroot}/usr/share/man \
+              -type f \
+              ! -name '*.gz' \
+              -exec gzip -9n {} +
+          fi
+
+          # Include every installed file and symbolic link.
+          (
+            cd %{buildroot}
+            find . \( -type f -o -type l \) -print |
+              LC_ALL=C sort |
+              sed 's|^\./|/|'
+          ) > %{_builddir}/ddd.files
+
+          # Own the application-specific data directories.
+          if [ -d %{buildroot}/usr/share/ddd ]; then
+            (
+              cd %{buildroot}
+              find usr/share/ddd -type d -print |
+                LC_ALL=C sort |
+                sed 's|^|%%dir /|'
+            ) >> %{_builddir}/ddd.files
+          fi
+
+          %files -f %{_builddir}/ddd.files
+          %defattr(-,root,root,-)
+          EOF
+
+          rm -rf rpmbuild
+
+          rpmbuild -bb ddd.spec \
+            --define "_topdir $(pwd)/rpmbuild" \
+            --define "pkgver ${RPM_VERSION}" \
+            --define "stage ${STAGE}"
+
+          BUILT_RPM="$(
+            find rpmbuild/RPMS \
+              -type f \
+              -name 'ddd-*.x86_64.rpm' \
+              -print \
+              -quit
+          )"
+
+          if [[ -z "$BUILT_RPM" ]]; then
+            echo "No x86_64 RPM package was generated" >&2
+            exit 1
+          fi
+
+          echo "Generated RPM: $BUILT_RPM"
+          cp "$BUILT_RPM" "../${RPM_FILE}"
+
+      - name: Test RPM package
+        run: |
+          set -euo pipefail
+
+          dnf -y \
+            --nogpgcheck \
+            install "./${RPM_FILE}"
+
+          rpm -q ddd
+          rpm -V ddd
+
+          rpm -q \
+            --queryformat \
+            'Package: %{NAME}\nVersion: %{VERSION}\nRelease: %{RELEASE}\nArchitecture: %{ARCH}\nDistribution: %{DISTRIBUTION}\n' \
+            ddd
+
+          ddd --help
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-rhel10-x86_64
+          path: ${{ env.RPM_FILE }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OWNER_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Download RPM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm-rhel10-x86_64
+          path: rpms
+
+      - name: Publish nightly release
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          RPM_FILES=(rpms/*.rpm)
+
+          if (( ${#RPM_FILES[@]} == 0 )); then
+            echo "No RPM package was downloaded" >&2
+            exit 1
+          fi
+
+          RPM_BASENAME="$(basename "${RPM_FILES[0]}")"
+
+          DATE="$(
+            sed -n \
+              's/^ddd-nightly-\([0-9]\{8\}\)_.*/\1/p' \
+              <<< "$RPM_BASENAME"
+          )"
+
+          if [[ -z "$DATE" ]]; then
+            echo "Could not determine build date from $RPM_BASENAME" >&2
+            exit 1
+          fi
+
+          TAG="nightly-${DATE}"
+
+          # Do not overwrite the title and notes if another platform workflow
+          # already created today's release.
+          if ! gh release view "$TAG" \
+            --repo "$OWNER_REPO" >/dev/null 2>&1; then
+
+            gh release create "$TAG" \
+              --repo "$OWNER_REPO" \
+              --title "DDD Nightly $DATE" \
+              --notes "Nightly package builds, including RHEL 10 compatible x86_64 RPM packages." \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+            || gh release view "$TAG" \
+              --repo "$OWNER_REPO" >/dev/null
+          fi
+
+          gh release upload "$TAG" \
+            --repo "$OWNER_REPO" \
+            "${RPM_FILES[@]}" \
+            --clobber
