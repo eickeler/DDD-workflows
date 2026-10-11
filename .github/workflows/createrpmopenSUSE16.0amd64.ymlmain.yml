@@ -1,0 +1,176 @@
+name: Create nightly .rpm package for openSUSE
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: leap16.0
+            title: openSUSE Leap 16.0
+            image: registry.opensuse.org/opensuse/leap:16.0
+          - distro: tumbleweed
+            title: openSUSE Tumbleweed
+            image: registry.opensuse.org/opensuse/tumbleweed:latest
+    container:
+      image: ${{ matrix.image }}
+    env:
+      MIRROR_REPO: https://github.com/eickeler/DDD.git
+      DISTRO: ${{ matrix.distro }}
+    steps:
+
+      - name: Install build dependencies
+        run: |
+          zypper --non-interactive refresh
+          zypper --non-interactive install --no-recommends \
+            git tar gzip which findutils diffutils rpm-build \
+            gcc gcc-c++ make autoconf automake libtool \
+            texinfo flex bison gawk \
+            motif-devel libXpm-devel libXext-devel libXt-devel libX11-devel \
+            libXmu-devel libXft-devel freetype2-devel fontconfig-devel \
+            ncurses-devel tinyxml2-devel
+
+      - name: Checkout latest master
+        run: |
+          git clone --depth 1 --branch master "$MIRROR_REPO" ddd
+          cd ddd
+
+          DATE="$(date +%Y%m%d)"
+          VERSION="3.5.0~rcX+git${DATE}"
+          RPM_FILE="ddd-nightly-${DATE}.${DISTRO}.x86_64.rpm"
+
+          {
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "DATE=$DATE"
+            echo "VERSION=$VERSION"
+            echo "RPM_FILE=$RPM_FILE"
+          } >> "$GITHUB_ENV"
+
+      - name: Build binaries
+        working-directory: ddd
+        run: |
+          etc/prereq
+          autoreconf -ifv
+          ./configure --prefix=/usr
+          make
+
+      - name: Create RPM package
+        working-directory: ddd
+        run: |
+          set -euo pipefail
+
+          # Install to staging directory
+          STAGE="$(pwd)/stage"
+          rm -rf "$STAGE"
+          make install DESTDIR="$STAGE"
+
+          # Remove version number from install directory
+          mv "$STAGE"/usr/share/ddd-* "$STAGE/usr/share/ddd"
+
+          # Spec file that just packages the staging tree.
+          # Shared-library dependencies are generated automatically by rpm.
+          cat > ddd.spec <<'EOF'
+          %global debug_package %{nil}
+          %global _build_id_links none
+
+          Name:       ddd
+          Version:    %{pkgver}
+          Release:    1.%{distro}
+          Summary:    Data Display Debugger - graphical debugger frontend
+          License:    GPL-3.0-or-later
+          URL:        https://www.gnu.org/software/ddd/
+          Requires:   gdb
+          Requires:   gnuplot
+          Recommends: xterm
+          Recommends: info
+          Recommends: liberation-fonts
+
+          %description
+          DDD is a graphical front-end for command-line debuggers such as GDB.
+          It provides source-level debugging and interactive graphical data
+          displays for complex data structures and images.
+
+          %install
+          mkdir -p %{buildroot}
+          cp -a %{stage}/. %{buildroot}/
+          rm -f %{buildroot}/usr/share/info/dir %{buildroot}/usr/lib/charset.alias
+
+          # gzip info and man pages ourselves so the file list is stable
+          find %{buildroot}/usr/share -path '*/info/*' -type f ! -name '*.gz' ! -name dir \
+            -exec gzip -9n {} +
+          if [ -d %{buildroot}/usr/share/man ]; then
+            find %{buildroot}/usr/share/man -type f ! -name '*.gz' -exec gzip -9n {} +
+          fi
+
+          # Generate the file list
+          ( cd %{buildroot} && find . \( -type f -o -type l \) | sed 's|^\.||' ) \
+            > %{_builddir}/ddd.files
+          ( cd %{buildroot} && find usr/share/ddd -type d | sed 's|^|%%dir /|' ) \
+            >> %{_builddir}/ddd.files
+
+          %files -f %{_builddir}/ddd.files
+          %defattr(-,root,root,-)
+          EOF
+
+          rpmbuild -bb ddd.spec \
+            --define "_topdir $(pwd)/rpmbuild" \
+            --define "pkgver ${VERSION}" \
+            --define "distro ${DISTRO}" \
+            --define "stage ${STAGE}"
+
+          cp rpmbuild/RPMS/x86_64/ddd-*.rpm "../${RPM_FILE}"
+
+      - name: Test package
+        run: |
+          set -euo pipefail
+          zypper --non-interactive --no-gpg-checks install --allow-unsigned-rpm "./${RPM_FILE}"
+          rpm -q ddd
+          ddd --help
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.distro }}
+          path: ${{ env.RPM_FILE }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OWNER_REPO: ${{ github.repository }}
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rpm-*
+          path: rpms
+          merge-multiple: true
+
+      - name: Publish nightly release
+        run: |
+          set -euo pipefail
+
+          DATE="$(basename "$(ls rpms/*.rpm | head -n1)" | grep -oE '[0-9]{8}' | head -n1)"
+          TAG="nightly-${DATE}"
+
+          # The release may already exist (e.g. created by the .deb workflow).
+          if ! gh release view "$TAG" --repo "$OWNER_REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$OWNER_REPO" \
+              --title "DDD Nightly $DATE" \
+              --notes "Nightly packages for DDD." \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+            || gh release view "$TAG" --repo "$OWNER_REPO" >/dev/null
+          fi
+
+          gh release upload "$TAG" --repo "$OWNER_REPO" rpms/*.rpm --clobber
