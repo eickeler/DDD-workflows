@@ -20,11 +20,17 @@ jobs:
         run: |
           git clone --depth 1 --branch master "$MIRROR_REPO" ddd
           cd ddd
-          echo "COMMIT=$(git rev-parse HEAD)" >> $GITHUB_ENV
-          echo "DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-          echo "VERSION=3.5.0-rcX+git${DATE}" >> $GITHUB_ENV
 
+          DATE="$(date +%Y%m%d)"
+          VERSION="3.5.0~rcX+git${DATE}+ubuntu24.04"
+          DEB_FILE="ddd-nightly-${DATE}_${VERSION}_amd64.deb"
 
+          {
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "DATE=$DATE"
+            echo "VERSION=$VERSION"
+            echo "DEB_FILE=$DEB_FILE"
+          } >> "$GITHUB_ENV"
 
       - name: Install build dependencies
 
@@ -113,7 +119,7 @@ jobs:
           
           # Build the .deb package
           dpkg-deb --build debian/ddd
-          mv debian/ddd.deb "../ddd-nightly-${DATE}_${VERSION}_amd64.deb"
+          mv debian/ddd.deb "../${DEB_FILE}"
 
 
 
@@ -122,10 +128,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y "./ddd-nightly-${DATE}_${VERSION}_amd64.deb"
-          dpkg-query -W -f='${Status}\n' ddd | grep -qx 'install ok installed'
+          sudo apt-get install -y "./${DEB_FILE}"
+          dpkg-query -W -f='${Status}\n' ddd |
+            grep -qx 'install ok installed'
           ddd --help
-
 
       - name: Publish nightly release
 
@@ -133,13 +139,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OWNER_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+
           TAG="nightly-${DATE}"
-          gh release create "$TAG" --repo "$OWNER_REPO" \
-            --title "DDD Nightly $DATE" \
-            --notes "Nightly .deb package for Ubuntu 24.04 (amd64)" \
-            --prerelease --target "$GITHUB_SHA" || \
-          gh release edit "$TAG" --repo "$OWNER_REPO" \
-            --title "DDD Nightly $DATE" --prerelease
-          
+
+          if gh release view "$TAG" --repo "$OWNER_REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$OWNER_REPO" \
+              --title "DDD Nightly $DATE — Ubuntu 24.04 (amd64)" \
+              --notes "Nightly .deb package for Ubuntu 24.04 (amd64)." \
+              --prerelease
+          else
+            gh release create "$TAG" --repo "$OWNER_REPO" \
+              --title "DDD Nightly $DATE — Ubuntu 24.04 (amd64)" \
+              --notes "Nightly .deb package for Ubuntu 24.04 (amd64)." \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi
+
           gh release upload "$TAG" --repo "$OWNER_REPO" \
-            "ddd-nightly-${DATE}_${VERSION}_amd64.deb" --clobber
+            "$DEB_FILE" --clobber
