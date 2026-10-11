@@ -145,12 +145,12 @@ jobs:
 
           if gh release view "$TAG" --repo "$OWNER_REPO" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "$OWNER_REPO" \
-              --title "DDD Nightly $DATE — Ubuntu 24.04 (amd64)" \
+              --title "DDD Nightly $DATE" \
               --notes "Nightly .deb package for Ubuntu 24.04 (amd64)." \
               --prerelease
           else
             gh release create "$TAG" --repo "$OWNER_REPO" \
-              --title "DDD Nightly $DATE — Ubuntu 24.04 (amd64)" \
+              --title "DDD Nightly $DATE" \
               --notes "Nightly .deb package for Ubuntu 24.04 (amd64)." \
               --prerelease \
               --target "$GITHUB_SHA"
