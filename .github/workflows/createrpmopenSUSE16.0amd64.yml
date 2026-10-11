@@ -244,7 +244,7 @@ jobs:
             gh release create "$TAG" \
               --repo "$OWNER_REPO" \
               --title "DDD Nightly $DATE" \
-              --notes "Nightly packages for Ubuntu 24.04, openSUSE Leap 16.0 and openSUSE Tumbleweed." \
+              --notes "Nightly packages for DDD." \
               --prerelease \
               --target "$GITHUB_SHA" \
             || gh release view "$TAG" \
