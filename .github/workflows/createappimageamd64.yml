@@ -1,0 +1,268 @@
+name: Create nightly AppImage for Linux x86_64
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    # Build against an older glibc for better AppImage compatibility.
+    container:
+      image: ubuntu:20.04
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      MIRROR_REPO: https://github.com/eickeler/DDD.git
+      ARCH: x86_64
+
+    steps:
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update -y
+          apt-get install -y \
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            libxpm-dev \
+            libmotif-dev \
+            texinfo \
+            flex \
+            bison \
+            libtinyxml2-dev \
+            libxext-dev \
+            libfreetype6-dev \
+            libxft-dev \
+            libfontconfig1-dev \
+            libncurses-dev \
+            gawk \
+            git \
+            curl \
+            ca-certificates \
+            file \
+            patchelf \
+            desktop-file-utils
+
+      - name: Checkout latest master
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone --depth 1 --branch master "$MIRROR_REPO" ddd
+          cd ddd
+
+          DATE="$(date +%Y%m%d)"
+          VERSION="3.5.0-rcX-git${DATE}"
+          APPIMAGE_FILE="ddd-nightly-${DATE}_${VERSION}_x86_64.AppImage"
+
+          {
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "DATE=$DATE"
+            echo "VERSION=$VERSION"
+            echo "APPIMAGE_FILE=$APPIMAGE_FILE"
+          } >> "$GITHUB_ENV"
+
+      - name: Build DDD
+        working-directory: ddd
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          etc/prereq -maintainer
+          autoreconf -ifv
+          ./configure --prefix=/usr
+          make -j"$(nproc)"
+
+      - name: Create AppDir
+        working-directory: ddd
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APPDIR="$PWD/AppDir"
+
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR"
+
+          # Install into the AppImage staging directory.
+          make install DESTDIR="$APPDIR"
+
+          test -x "$APPDIR/usr/bin/ddd"
+
+          # Provide a deterministic desktop entry.
+          install -d "$APPDIR/usr/share/applications"
+
+          cat > "$APPDIR/usr/share/applications/ddd.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=DDD
+          GenericName=Graphical Debugger
+          Comment=Graphical front-end for command-line debuggers
+          Exec=ddd %F
+          Icon=ddd
+          Terminal=false
+          Categories=Development;Debugger;
+          Keywords=debugger;gdb;development;
+          StartupNotify=true
+          EOF
+
+          # Use an icon installed by DDD when available.
+          ICON_FILE="$(
+            find "$APPDIR/usr/share" -type f \
+              \( -iname 'ddd.png' -o \
+                 -iname 'ddd.xpm' -o \
+                 -iname 'ddd.svg' \) \
+              -print -quit 2>/dev/null || true
+          )"
+
+          # Create a fallback icon if DDD did not install one.
+          if [[ -z "$ICON_FILE" ]]; then
+            install -d "$APPDIR/usr/share/icons/hicolor/scalable/apps"
+            ICON_FILE="$APPDIR/usr/share/icons/hicolor/scalable/apps/ddd.svg"
+
+            cat > "$ICON_FILE" <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg"
+               width="256"
+               height="256"
+               viewBox="0 0 256 256">
+            <rect width="256" height="256" rx="32" fill="#263238"/>
+            <rect x="24" y="24" width="208" height="208"
+                  rx="20" fill="#37474f"/>
+            <text x="128" y="154"
+                  text-anchor="middle"
+                  font-family="sans-serif"
+                  font-size="76"
+                  font-weight="bold"
+                  fill="#ffffff">DDD</text>
+          </svg>
+          EOF
+          fi
+
+          echo "ICON_FILE=$ICON_FILE" >> "$GITHUB_ENV"
+
+      - name: Download linuxdeploy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl --fail --location --retry 3 \
+            --output linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+
+          chmod +x linuxdeploy-x86_64.AppImage
+
+      - name: Build AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APPDIR="$GITHUB_WORKSPACE/ddd/AppDir"
+          OUTPUT_FILE="$GITHUB_WORKSPACE/$APPIMAGE_FILE"
+
+          rm -f "$OUTPUT_FILE"
+
+          # APPIMAGE_EXTRACT_AND_RUN avoids requiring FUSE in the container.
+          ARCH=x86_64 \
+          OUTPUT="$OUTPUT_FILE" \
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+            "$GITHUB_WORKSPACE/linuxdeploy-x86_64.AppImage" \
+              --appdir "$APPDIR" \
+              --executable "$APPDIR/usr/bin/ddd" \
+              --desktop-file \
+                "$APPDIR/usr/share/applications/ddd.desktop" \
+              --icon-file "$ICON_FILE" \
+              --output appimage
+
+          test -f "$OUTPUT_FILE"
+          chmod +x "$OUTPUT_FILE"
+
+          file "$OUTPUT_FILE"
+          ls -lh "$OUTPUT_FILE"
+
+      - name: Test AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -x "./${APPIMAGE_FILE}"
+
+          # Run without FUSE and verify that the packaged binary starts.
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+            "./${APPIMAGE_FILE}" --version
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-x86_64
+          path: ${{ env.APPIMAGE_FILE }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OWNER_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Download AppImage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: appimage-*
+          path: appimages
+          merge-multiple: true
+
+      - name: Publish nightly release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APPIMAGE="$(
+            find appimages -name '*.AppImage' -type f |
+            head -n1
+          )"
+
+          if [[ -z "$APPIMAGE" ]]; then
+            echo "No AppImage artifact found" >&2
+            exit 1
+          fi
+
+          DATE="$(
+            basename "$APPIMAGE" |
+            grep -oE '[0-9]{8}' |
+            head -n1
+          )"
+
+          if [[ -z "$DATE" ]]; then
+            echo "Could not determine build date" >&2
+            exit 1
+          fi
+
+          TAG="nightly-${DATE}"
+
+          if ! gh release view "$TAG" \
+            --repo "$OWNER_REPO" >/dev/null 2>&1
+          then
+            gh release create "$TAG" \
+              --repo "$OWNER_REPO" \
+              --title "DDD Nightly $DATE" \
+              --notes "Nightly packages for DDD." \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+            || gh release view "$TAG" \
+                 --repo "$OWNER_REPO" >/dev/null
+          fi
+
+          gh release upload "$TAG" \
+            --repo "$OWNER_REPO" \
+            appimages/*.AppImage \
+            --clobber
