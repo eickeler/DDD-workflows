@@ -1,0 +1,160 @@
+name: Create release source tarball
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release version, for example 3.5.0
+        required: true
+        type: string
+        default: "3.5.0"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+
+    env:
+      MIRROR_REPO: https://github.com/eickeler/DDD.git
+      RELEASE_VERSION: ${{ inputs.release_version }}
+
+    steps:
+      - name: Determine release information
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release version: $RELEASE_VERSION" >&2
+            echo "Expected a version such as 3.5.0." >&2
+            exit 1
+          fi
+
+          SOURCE_TAG="DDD_${RELEASE_VERSION//./_}"
+          RELEASE_TAG="$SOURCE_TAG"
+          TARBALL_FILE="ddd-${RELEASE_VERSION}.tar.gz"
+
+          {
+            echo "SOURCE_TAG=$SOURCE_TAG"
+            echo "RELEASE_TAG=$RELEASE_TAG"
+            echo "TARBALL_FILE=$TARBALL_FILE"
+          } >> "$GITHUB_ENV"
+
+          echo "Release version: $RELEASE_VERSION"
+          echo "Source tag:      $SOURCE_TAG"
+          echo "Release tag:     $RELEASE_TAG"
+          echo "Tarball:         $TARBALL_FILE"
+
+      - name: Verify source tag in mirror repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! git ls-remote --exit-code --tags  "$MIRROR_REPO"  "refs/tags/${SOURCE_TAG}" >/dev/null; then
+            echo "Tag ${SOURCE_TAG} does not exist in ${MIRROR_REPO}" >&2
+            exit 1
+          fi
+
+      - name: Checkout release tag from mirror repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone --depth 1 --branch "$SOURCE_TAG" "$MIRROR_REPO" ddd
+
+          COMMIT="$(git -C ddd rev-parse HEAD)"
+          echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
+
+          echo "Checked out source tag: $SOURCE_TAG"
+          echo "Source commit: $COMMIT"
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential autoconf automake libtool make libxpm-dev \
+            libmotif-dev texinfo flex bison libtinyxml2-dev libxext-dev \
+            libfreetype-dev libxft-dev libfontconfig-dev libncurses-dev \
+            gawk gdb fonts-liberation fig2dev texlive
+
+      - name: Build and test binaries
+        working-directory: ddd
+        run: |
+          set -euo pipefail
+
+          autoreconf -ifv
+          ./configure
+          make -j"$(nproc)"
+          ddd/ddd --help
+
+      - name: Create release source tarball
+        working-directory: ddd
+        run: |
+          set -euo pipefail
+
+          make dist
+
+          GENERATED_TARBALL="ddd-${RELEASE_VERSION}.tar.gz"
+
+          if [[ ! -f "$GENERATED_TARBALL" ]]; then
+            echo "Expected ${GENERATED_TARBALL}, but make dist generated:" >&2
+
+            find . -maxdepth 1 -type f -name 'ddd-*.tar.gz' -print >&2
+
+            echo "Check the version configured in ${SOURCE_TAG}." >&2
+            exit 1
+          fi
+
+          mv "$GENERATED_TARBALL" "../${TARBALL_FILE}"
+
+      - name: Verify release source tarball
+        run: |
+          set -euo pipefail
+
+          test -s "$TARBALL_FILE"
+          gzip --test "$TARBALL_FILE"
+
+          TOP_LEVEL_DIRECTORIES="$(tar -tzf "$TARBALL_FILE" | sed 's|/.*||' | sort -u)"
+
+          if [[ "$TOP_LEVEL_DIRECTORIES" != "ddd-${RELEASE_VERSION}" ]]; then
+            echo "Unexpected top-level tarball content:" >&2
+            echo "$TOP_LEVEL_DIRECTORIES" >&2
+            exit 1
+          fi
+
+          echo "Tarball: $TARBALL_FILE"
+          echo "SHA-256:"
+          sha256sum "$TARBALL_FILE"
+
+      - name: Create release notes
+        run: |
+          set -euo pipefail
+
+          cat > release-notes.md <<EOF
+          DDD ${RELEASE_VERSION} source release.
+
+          Source repository: ${MIRROR_REPO}
+          Source tag: ${SOURCE_TAG}
+          Source commit: ${COMMIT}
+          EOF
+
+      - name: Publish release in DDD-workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          TITLE="DDD ${RELEASE_VERSION}"
+
+          if gh release view "$RELEASE_TAG" --repo "$OWNER_REPO" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$OWNER_REPO" --title "$TITLE" --notes-file release-notes.md --prerelease=false
+          else
+            gh release create "$RELEASE_TAG" --repo "$OWNER_REPO" --target "$GITHUB_SHA" --title "$TITLE" --notes-file release-notes.md
+          fi
+
+          gh release upload "$RELEASE_TAG" --repo "$OWNER_REPO" "$TARBALL_FILE" --clobber
