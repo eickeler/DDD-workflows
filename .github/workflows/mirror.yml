@@ -73,3 +73,31 @@ jobs:
     uses: ./.github/workflows/createtarball.yml
     permissions:
       contents: write
+
+  appimage_amd64:
+    needs: mirror
+    if: needs.mirror.outputs.changed == 'true'
+    uses: ./.github/workflows/createappimageamd64.yml
+    permissions:
+      contents: write
+
+  deb_ubuntu_amd64:
+    needs: mirror
+    if: needs.mirror.outputs.changed == 'true'
+    uses: ./.github/workflows/createdebubuntuamd64.yml
+    permissions:
+      contents: write
+
+  rpm_opensuse_x86_64:
+    needs: mirror
+    if: needs.mirror.outputs.changed == 'true'
+    uses: ./.github/workflows/createrpmopenSUSE16.0x86_64.yml
+    permissions:
+      contents: write
+
+  rpm_rhel10_x86_64:
+    needs: mirror
+    if: needs.mirror.outputs.changed == 'true'
+    uses: ./.github/workflows/createrpmrhel10x86_64.yml
+    permissions:
+      contents: write
