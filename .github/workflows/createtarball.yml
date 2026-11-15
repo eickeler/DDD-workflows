@@ -39,16 +39,15 @@ jobs:
           ddd/ddd --help
 
 
-      - name: Debug ddd-aliases.pdf
-      
+      - name: Debug exact rule
         working-directory: ddd/ddd
         run: |
-          gs --version
-          fig2dev -V || true
-          ls -ld . PICS
-          (cd PICS && fig2dev -L pdf ddd-aliases.fig) > /tmp/test.pdf; echo "fig2dev rc=$?"
-          ls -l /tmp/test.pdf
-          gs -q -dNOSAFER -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -o /tmp/out.pdf /tmp/test.pdf; echo "gs rc=$?"
+          sudo apt-get install -y strace
+          ls -la PICS/ddd-aliases* || true
+          umask
+          make -n ../ddd/PICS/ddd-aliases.pdf || true
+          strace -f -e trace=file -o /tmp/trace.txt make ../ddd/PICS/ddd-aliases.pdf || true
+          grep -E 'EACCES|ENOENT' /tmp/trace.txt | grep -i aliases || true
 
         
       - name: Create source tarball
