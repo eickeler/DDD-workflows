@@ -39,16 +39,16 @@ jobs:
           ddd/ddd --help
 
 
-      - name: Debug exact rule
+      - name: Check AppArmor
         working-directory: ddd/ddd
         run: |
-          sudo apt-get install -y strace
-          ls -la PICS/ddd-aliases* || true
-          umask
-          make -n ../ddd/PICS/ddd-aliases.pdf || true
-          strace -f -e trace=file -o /tmp/trace.txt make ../ddd/PICS/ddd-aliases.pdf || true
-          grep -E 'EACCES|ENOENT' /tmp/trace.txt | grep -i aliases || true
-
+          cat /etc/os-release | head -3
+          sudo aa-status 2>&1 | grep -i -E 'gs|ghostscript' || true
+          ls /etc/apparmor.d | grep -i -E 'gs|ghost' || true
+          sudo dmesg | grep -i -E 'apparmor.*DENIED' | tail -5 || true
+          echo test > PICS/t.txt
+          gs -q -dNOSAFER -c "(PICS/t.txt) (r) file closefile quit"; echo "gs rc=$?"
+          
         
       - name: Create source tarball
 
