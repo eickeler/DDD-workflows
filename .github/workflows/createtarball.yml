@@ -39,20 +39,6 @@ jobs:
           ddd/ddd --help
 
 
-      - name: Test AppArmor gs profile
-        working-directory: ddd/ddd
-        run: |
-          (cd PICS && fig2dev -L pdf ddd-aliases.fig) > /tmp/test.pdf
-          cp /tmp/test.pdf /tmp/test.pdf-17
-          cp /tmp/test.pdf PICS/test.pdf
-          cp /tmp/test.pdf PICS/test.pdf-17
-          for f in /tmp/test.pdf-17 PICS/test.pdf PICS/test.pdf-17; do
-            gs -q -dNOSAFER -dBATCH -dNODISPLAY -c "($f) (r) file closefile" ; echo "$f rc=$?"
-          done
-          sudo dmesg | grep -i 'DENIED' | grep -i 'profile="gs"' | tail -5 || true
-          sudo cat /etc/apparmor.d/gs | head -60
-          
-        
       - name: Create source tarball
 
         working-directory: ddd
