@@ -23,18 +23,6 @@ jobs:
           echo "COMMIT=$(git rev-parse HEAD)" >> $GITHUB_ENV
           echo "DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-      - name: Debug ddd-aliases.pdf
-      
-        working-directory: ddd/ddd
-        run: |
-          gs --version
-          fig2dev -V || true
-          ls -ld . PICS
-          (cd PICS && fig2dev -L pdf ddd-aliases.fig) > /tmp/test.pdf; echo "fig2dev rc=$?"
-          ls -l /tmp/test.pdf
-          gs -q -dNOSAFER -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -o /tmp/out.pdf /tmp/test.pdf; echo "gs rc=$?"
-
-        
       - name: Build binaries
 
         working-directory: ddd
@@ -51,6 +39,18 @@ jobs:
           ddd/ddd --help
 
 
+      - name: Debug ddd-aliases.pdf
+      
+        working-directory: ddd/ddd
+        run: |
+          gs --version
+          fig2dev -V || true
+          ls -ld . PICS
+          (cd PICS && fig2dev -L pdf ddd-aliases.fig) > /tmp/test.pdf; echo "fig2dev rc=$?"
+          ls -l /tmp/test.pdf
+          gs -q -dNOSAFER -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -o /tmp/out.pdf /tmp/test.pdf; echo "gs rc=$?"
+
+        
       - name: Create source tarball
 
         working-directory: ddd
