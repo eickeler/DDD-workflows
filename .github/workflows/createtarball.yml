@@ -42,6 +42,7 @@ jobs:
       - name: Test AppArmor gs profile
         working-directory: ddd/ddd
         run: |
+          (cd PICS && fig2dev -L pdf ddd-aliases.fig) > /tmp/test.pdf
           cp /tmp/test.pdf /tmp/test.pdf-17
           cp /tmp/test.pdf PICS/test.pdf
           cp /tmp/test.pdf PICS/test.pdf-17
