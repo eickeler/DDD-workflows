@@ -3,59 +3,93 @@ name: Mirror DDD to GitHub
 on:
   schedule:
 
-    - cron: "0 2 * * *"     # nightly 02:00 UTC
+    - cron: "19 1 * * *"     # nightly 01:19 UTC
 
   workflow_dispatch:
 
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+
     outputs:
       changed: ${{ steps.check.outputs.changed }} 
     env:
       UPSTREAM: https://git.savannah.gnu.org/git/ddd.git
-      TARGET:   eickeler/DDD      # mirror repo on GitHub
+      TARGET: eickeler/DDD
+      GIT_TERMINAL_PROMPT: "0"
 
     steps:
-
-      - name: Tolerate slow links
-
-        run: |
-          git config --global http.lowSpeedLimit 1000   # bytes/sec
-          git config --global http.lowSpeedTime 60      # seconds
-          git config --global fetch.prune true
-
-
-      - name: Check for changes (no clone)
-
+      - name: Check refs and clone with backoff
         id: check
         shell: bash
         run: |
           set -euo pipefail
-          upstream_refs="$(git ls-remote --heads --tags "$UPSTREAM" | sort)"
-          target_refs="$(git ls-remote --heads --tags "https://github.com/${TARGET}.git" | sort || true)"
-          if [ "$upstream_refs" = "$target_refs" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No changes detected; skipping mirror."
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Changes detected; will mirror."
+
+          # Tolerate genuinely slow transfers.
+          # These settings do not handle HTTP 502 errors.
+          git config --global http.lowSpeedLimit 1
+          git config --global http.lowSpeedTime 180
+
+          retry() {
+            local attempt rc=1 delay
+
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then
+                return 0
+              else
+                rc=$?
+              fi
+
+              if (( attempt == 5 )); then
+                echo "Failed after 5 attempts." >&2
+                return "$rc"
+              fi
+
+              # Approximately 1, 2, 4, and 8 minutes, plus jitter.
+              delay=$((60 * (2 ** (attempt - 1)) + RANDOM % 30))
+              echo "Attempt $attempt failed; retrying in ${delay}s." >&2
+              sleep "$delay"
+            done
+          }
+
+          read_refs() {
+            # Truncate the file on each attempt so failed attempts
+            # cannot leave partial output in the comparison.
+            git ls-remote --heads --tags "$1" > "$2"
+          }
+
+          clone_upstream() {
+            # Remove any incomplete clone before retrying.
+            rm -rf upstream.git
+            git clone --mirror "$UPSTREAM" upstream.git
+          }
+
+          upstream_refs="$RUNNER_TEMP/upstream.refs"
+          target_refs="$RUNNER_TEMP/target.refs"
+
+          retry read_refs "$UPSTREAM" "$upstream_refs"
+          retry read_refs "https://github.com/${TARGET}.git" "$target_refs"
+
+          # A populated upstream should never return an empty ref list.
+          if [[ ! -s "$upstream_refs" ]]; then
+            echo "Upstream returned no refs; refusing to mirror." >&2
+            exit 1
           fi
 
+          LC_ALL=C sort -o "$upstream_refs" "$upstream_refs"
+          LC_ALL=C sort -o "$target_refs" "$target_refs"
 
-      - name: Output result
-
-        if: steps.check.outputs.changed == 'false'
-        run: |
-          echo "No mirroring needed: upstream and GitHub refs are identical."
-          echo "No mirroring needed: upstream and GitHub refs are identical." >> "$GITHUB_STEP_SUMMARY"
-
-
-      - name: Clone upstream as mirror
-
-        if: steps.check.outputs.changed == 'true'
-        run: git clone --mirror "$UPSTREAM" upstream.git
-
+          if cmp -s "$upstream_refs" "$target_refs"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes detected; skipping mirror."
+            echo "Upstream and GitHub refs are identical." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            retry clone_upstream
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Changes detected; upstream cloned successfully."
+          fi
 
       - name: Push to GitHub mirror
 
