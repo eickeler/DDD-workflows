@@ -15,22 +15,56 @@ jobs:
     outputs:
       changed: ${{ steps.check.outputs.changed }} 
     env:
-      UPSTREAM: https://git.savannah.gnu.org/git/ddd.git
+      UPSTREAM: https://https.https.git.savannah.gnu.org/git/ddd.git
       TARGET: eickeler/DDD
       GIT_TERMINAL_PROMPT: "0"
 
     steps:
-      - name: Diagnose Savannah HTTPS redirects
+      - name: Select a working Savannah HTTPS mirror
         shell: bash
+        timeout-minutes: 15
         run: |
-          curl --silent --show-error \
-            --location --max-redirs 5 \
-            --connect-timeout 20 --max-time 120 \
-            --dump-header - \
-            --output /dev/null \
-            --write-out '\nFinal URL: %{url_effective}\nHTTP status: %{http_code}\nFinal server IP: %{remote_ip}\n' \
-            'https://git.savannah.gnu.org/git/ddd.git/info/refs?service=git-upload-pack'
-        
+          set -euo pipefail
+
+          host="https.git.savannah.gnu.org"
+
+          for attempt in 1 2 3; do
+            # Obtain the currently advertised IPv4 addresses.
+            mapfile -t addresses < <(
+              getent ahostsv4 "$host" |
+                awk '{print $1}' |
+                sort -u
+            )
+
+            for ip in "${addresses[@]}"; do
+              echo "Testing Savannah mirror at $ip"
+
+              # Override DNS resolution, but retain the hostname
+              # for TLS certificate verification.
+              if timeout 60s git \
+                -c "http.curloptResolve=${host}:443:${ip}" \
+                ls-remote --heads --tags "$UPSTREAM" > /dev/null
+              then
+                # Apply the selection to subsequent Git operations
+                # for this runner only.
+                git config --global --replace-all \
+                  http.curloptResolve "${host}:443:${ip}"
+
+                echo "Selected working mirror: $ip"
+                exit 0
+              fi
+            done
+
+            if (( attempt < 3 )); then
+              delay=$((60 * attempt + RANDOM % 30))
+              echo "No working IPv4 mirror found; retrying in ${delay}s."
+              sleep "$delay"
+            fi
+          done
+
+          echo "No working advertised IPv4 mirror found." >&2
+          exit 1
+          
       - name: Check refs and clone with backoff
         id: check
         shell: bash
