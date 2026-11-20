@@ -6,6 +6,15 @@ on:
     - cron: "19 1 * * *"     # nightly 01:19 UTC
 
   workflow_dispatch:
+    inputs:
+      force:
+        description: Build and publish even if upstream is unchanged (e.g. after a failed build)
+        type: boolean
+        default: false
+
+# Builders only need read access; the publish job raises this to write.
+permissions:
+  contents: read
 
 jobs:
   mirror:
@@ -13,7 +22,11 @@ jobs:
     timeout-minutes: 60
 
     outputs:
-      changed: ${{ steps.check.outputs.changed }} 
+      changed: ${{ steps.check.outputs.changed }}
+      # Builders and publish run when upstream changed or a rebuild is forced.
+      build: ${{ steps.check.outputs.changed == 'true' || inputs.force == true }}
+      date: ${{ steps.check.outputs.date }}
+      commit: ${{ steps.check.outputs.commit }}
     env:
       UPSTREAM: https://https.git.savannah.gnu.org/git/ddd.git
       TARGET: eickeler/DDD
@@ -110,6 +123,9 @@ jobs:
             git clone --mirror "$UPSTREAM" upstream.git
           }
 
+          # One UTC date for the whole run; used as the nightly release tag.
+          echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
           upstream_refs="$RUNNER_TEMP/upstream.refs"
           target_refs="$RUNNER_TEMP/target.refs"
 
@@ -124,6 +140,15 @@ jobs:
 
           LC_ALL=C sort -o "$upstream_refs" "$upstream_refs"
           LC_ALL=C sort -o "$target_refs" "$target_refs"
+
+          # The master commit being mirrored (also valid for forced
+          # rebuilds, when nothing is cloned).
+          commit="$(awk '$2 == "refs/heads/master" {print $1}' "$upstream_refs")"
+          if [[ -z "$commit" ]]; then
+            echo "Upstream has no master branch" >&2
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
           if cmp -s "$upstream_refs" "$target_refs"; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -146,37 +171,133 @@ jobs:
           git remote add github "https://x-access-token:${PAT}@github.com/${{ env.TARGET }}.git"
           git push --mirror github
 
+  # The builders only upload artifacts named nightly-*.
+  # All publishing happens in the publish job below.
   tarball:
     needs: mirror
-    if: needs.mirror.outputs.changed == 'true'  # guard at job level
+    if: needs.mirror.outputs.build == 'true'  # guard at job level
     uses: ./.github/workflows/createtarball.yml
-    permissions:
-      contents: write
 
   appimage_amd64:
     needs: mirror
-    if: needs.mirror.outputs.changed == 'true'
+    if: needs.mirror.outputs.build == 'true'
     uses: ./.github/workflows/createappimageamd64.yml
-    permissions:
-      contents: write
 
   deb_ubuntu_amd64:
     needs: mirror
-    if: needs.mirror.outputs.changed == 'true'
+    if: needs.mirror.outputs.build == 'true'
     uses: ./.github/workflows/createdebubuntuamd64.yml
-    permissions:
-      contents: write
 
   rpm_opensuse_x86_64:
     needs: mirror
-    if: needs.mirror.outputs.changed == 'true'
+    if: needs.mirror.outputs.build == 'true'
     uses: ./.github/workflows/createrpmopenSUSE16.0x86_64.yml
-    permissions:
-      contents: write
 
   rpm_rhel10_x86_64:
     needs: mirror
-    if: needs.mirror.outputs.changed == 'true'
+    if: needs.mirror.outputs.build == 'true'
     uses: ./.github/workflows/createrpmrhel10x86_64.yml
+
+  publish:
+    needs:
+      - mirror
+      - tarball
+      - appimage_amd64
+      - deb_ubuntu_amd64
+      - rpm_opensuse_x86_64
+      - rpm_rhel10_x86_64
+    # Run even if some builders failed, so the successful ones are still
+    # published; the job fails at the end to make the failures visible.
+    if: ${{ !cancelled() && needs.mirror.outputs.build == 'true' }}
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OWNER_REPO: ${{ github.repository }}
+      DATE: ${{ needs.mirror.outputs.date }}
+      COMMIT: ${{ needs.mirror.outputs.commit }}
+      NEEDS: ${{ toJSON(needs) }}
+
+    steps:
+      - name: Download all nightly artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish nightly release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          FILES=(dist/*)
+
+          if (( ${#FILES[@]} == 0 )); then
+            echo "No nightly artifacts were downloaded" >&2
+            exit 1
+          fi
+
+          TAG="nightly-${DATE}"
+
+          # Per-builder results, excluding the mirror job itself.
+          mapfile -t RESULTS < <(
+            jq -r 'to_entries[]
+                   | select(.key != "mirror")
+                   | "\(.key)\t\(.value.result)"' <<< "$NEEDS"
+          )
+
+          FAILED=()
+          {
+            echo "Nightly builds of GNU DDD from the master branch."
+            echo
+            echo "Source commit: https://github.com/eickeler/DDD/commit/${COMMIT}"
+            echo
+            echo "| Build | Result |"
+            echo "|---|---|"
+            for line in "${RESULTS[@]}"; do
+              job="${line%%$'\t'*}"
+              result="${line#*$'\t'}"
+              echo "| ${job} | ${result} |"
+              [[ "$result" == success ]] || FAILED+=("$job")
+            done
+            echo
+            echo "The \"Source code\" archives below are generated by GitHub"
+            echo "from the workflow repository, not from DDD. Use the"
+            echo "ddd-nightly-*.tar.gz asset for the DDD source."
+          } > release-notes.md
+
+          cat release-notes.md
+
+          if gh release view "$TAG" --repo "$OWNER_REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --repo "$OWNER_REPO" \
+              --notes-file release-notes.md
+          else
+            gh release create "$TAG" \
+              --repo "$OWNER_REPO" \
+              --title "DDD Nightly $DATE" \
+              --notes-file release-notes.md \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi
+
+          # Replacing assets is intended for nightlies: a second run on the
+          # same day supersedes the earlier build.
+          gh release upload "$TAG" \
+            --repo "$OWNER_REPO" \
+            "${FILES[@]}" \
+            --clobber
+
+          {
+            echo "Published ${#FILES[@]} file(s) to ${TAG}:"
+            printf -- '- %s\n' "${FILES[@]##*/}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if (( ${#FAILED[@]} > 0 )); then
+            echo "::error::Builds failed or were skipped: ${FAILED[*]}"
+            exit 1
+          fi

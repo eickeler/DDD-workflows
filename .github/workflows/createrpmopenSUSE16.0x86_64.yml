@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -55,8 +55,19 @@ jobs:
           git clone --depth 1 --branch master "$MIRROR_REPO" ddd
           cd ddd
 
+          # Upstream version from AC_INIT, e.g. 3.5.0 or 3.5.0-rcX.
+          BASE_VERSION="$(sed -n 's/^AC_INIT(\[ddd\],[[:space:]]*\[\([^]]*\)\].*/\1/p' configure.ac)"
+          if [[ -z "$BASE_VERSION" ]]; then
+            echo "Could not read the version from AC_INIT in configure.ac" >&2
+            exit 1
+          fi
+
+          # '~' sorts a pre-release (3.5.0~rcX) below the release;
+          # '+git' sorts a snapshot of a release (3.5.0+git...) above it.
+          PKG_BASE="$(tr '-' '~' <<< "$BASE_VERSION")"
+
           DATE="$(date +%Y%m%d)"
-          VERSION="3.5.0~rcX+git${DATE}"
+          VERSION="${PKG_BASE}+git${DATE}"
           PACKAGE_VERSION="${VERSION}+${PACKAGE_SUFFIX}"
           RPM_FILE="ddd-nightly-${DATE}_${PACKAGE_VERSION}_x86_64.rpm"
 
@@ -193,65 +204,7 @@ jobs:
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rpm-${{ matrix.distro }}
+          # Published by the central publish job in mirror.yml.
+          name: nightly-rpm-${{ matrix.distro }}
           path: ${{ env.RPM_FILE }}
           if-no-files-found: error
-
-  publish:
-    needs: build
-    runs-on: ubuntu-24.04
-
-    env:
-      GH_TOKEN: ${{ github.token }}
-      OWNER_REPO: ${{ github.repository }}
-
-    steps:
-      - name: Download packages
-        uses: actions/download-artifact@v4
-        with:
-          pattern: rpm-*
-          path: rpms
-          merge-multiple: true
-
-      - name: Publish nightly release
-        run: |
-          set -euo pipefail
-
-          shopt -s nullglob
-          RPM_FILES=(rpms/*.rpm)
-
-          if (( ${#RPM_FILES[@]} == 0 )); then
-            echo "No RPM packages were downloaded" >&2
-            exit 1
-          fi
-
-          DATE="$(
-            basename "${RPM_FILES[0]}" |
-              grep -oE '[0-9]{8}' |
-              head -n1
-          )"
-
-          if [[ -z "$DATE" ]]; then
-            echo "Could not determine package date" >&2
-            exit 1
-          fi
-
-          TAG="nightly-${DATE}"
-
-          if ! gh release view "$TAG" \
-            --repo "$OWNER_REPO" >/dev/null 2>&1; then
-
-            gh release create "$TAG" \
-              --repo "$OWNER_REPO" \
-              --title "DDD Nightly $DATE" \
-              --notes "Nightly packages for DDD." \
-              --prerelease \
-              --target "$GITHUB_SHA" \
-            || gh release view "$TAG" \
-              --repo "$OWNER_REPO" >/dev/null
-          fi
-
-          gh release upload "$TAG" \
-            --repo "$OWNER_REPO" \
-            "${RPM_FILES[@]}" \
-            --clobber
