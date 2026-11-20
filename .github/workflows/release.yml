@@ -1,0 +1,221 @@
+name: Release DDD packages
+
+# Builds the binary packages for one DDD release from its upstream tag and
+# publishes them once as a GitHub release. Start it by hand after the
+# release tag has been mirrored.
+#
+# The nightly builds in mirror.yml use the same builder workflows; this
+# workflow only calls them with the release tag and release=true.
+#
+# The source tarball is not part of this release: the official, signed
+# tarball is published on ftp.gnu.org.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 3.5.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Never run two releases at the same time.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+
+    outputs:
+      tag: ${{ steps.info.outputs.tag }}
+      commit: ${{ steps.info.outputs.commit }}
+
+    env:
+      MIRROR_REPO: https://github.com/eickeler/DDD.git
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      OWNER_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Determine and verify the release tag
+        id: info
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release version: $VERSION (expected e.g. 3.5.0)" >&2
+            exit 1
+          fi
+
+          # Upstream tag schemes: DDD-3.5.0-RELEASE (since 3.5.0) and
+          # DDD_3_4_1 (older releases). Use whichever exists.
+          TAG=""
+          for tag in "DDD-${VERSION}-RELEASE" "DDD_${VERSION//./_}"; do
+            if git ls-remote --exit-code --tags "$MIRROR_REPO" "refs/tags/${tag}" >/dev/null; then
+              TAG="$tag"
+              break
+            fi
+          done
+
+          if [[ -z "$TAG" ]]; then
+            echo "No release tag for ${VERSION} in ${MIRROR_REPO}" >&2
+            echo "Tried DDD-${VERSION}-RELEASE and DDD_${VERSION//./_}." >&2
+            exit 1
+          fi
+
+          # Run once: refuse to touch an existing release.
+          if gh release view "$TAG" --repo "$OWNER_REPO" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists in ${OWNER_REPO}." >&2
+            echo "Delete it first if it really has to be rebuilt." >&2
+            exit 1
+          fi
+
+          git -c advice.detachedHead=false \
+            clone --quiet --depth 1 --branch "$TAG" "$MIRROR_REPO" ddd
+
+          AC_VERSION="$(sed -n 's/^AC_INIT(\[ddd\],[[:space:]]*\[\([^]]*\)\].*/\1/p' ddd/configure.ac)"
+          if [[ "$AC_VERSION" != "$VERSION" ]]; then
+            echo "Tag ${TAG} has AC_INIT version '${AC_VERSION}', expected '${VERSION}'" >&2
+            exit 1
+          fi
+
+          COMMIT="$(git -C ddd rev-parse HEAD)"
+
+          {
+            echo "tag=$TAG"
+            echo "commit=$COMMIT"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "Release version: ${VERSION}"
+            echo "Source tag: ${TAG}"
+            echo "Source commit: ${COMMIT}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  deb_ubuntu_amd64:
+    needs: prepare
+    uses: ./.github/workflows/createdebubuntuamd64.yml
+    with:
+      ref: ${{ needs.prepare.outputs.tag }}
+      release: true
+
+  rpm_opensuse_x86_64:
+    needs: prepare
+    uses: ./.github/workflows/createrpmopenSUSE16.0x86_64.yml
+    with:
+      ref: ${{ needs.prepare.outputs.tag }}
+      release: true
+
+  rpm_rhel10_x86_64:
+    needs: prepare
+    uses: ./.github/workflows/createrpmrhel10x86_64.yml
+    with:
+      ref: ${{ needs.prepare.outputs.tag }}
+      release: true
+
+  appimage_amd64:
+    needs: prepare
+    uses: ./.github/workflows/createappimageamd64.yml
+    with:
+      ref: ${{ needs.prepare.outputs.tag }}
+      release: true
+
+  publish:
+    # Default condition: runs only if every builder succeeded, so a
+    # release is never published incomplete.
+    needs:
+      - prepare
+      - deb_ubuntu_amd64
+      - rpm_opensuse_x86_64
+      - rpm_rhel10_x86_64
+      - appimage_amd64
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OWNER_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      COMMIT: ${{ needs.prepare.outputs.commit }}
+
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          FILES=(dist/*)
+
+          if (( ${#FILES[@]} == 0 )); then
+            echo "No packages were downloaded" >&2
+            exit 1
+          fi
+
+          # Checked again here: this job's token also sees draft releases.
+          if gh release view "$TAG" --repo "$OWNER_REPO" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists in ${OWNER_REPO}; not touching it." >&2
+            exit 1
+          fi
+
+          (cd dist && sha256sum -- *) > SHA256SUMS
+          cat SHA256SUMS
+
+          {
+            echo "GNU DDD ${VERSION}"
+            echo
+            echo "The official source release is the signed tarball on"
+            echo "https://ftp.gnu.org/gnu/ddd/."
+            echo
+            echo "The packages below are convenience binaries, built by GitHub Actions"
+            echo "from tag \`${TAG}\` (commit https://github.com/eickeler/DDD/commit/${COMMIT})."
+            echo "They are not signed; verify downloads with \`SHA256SUMS\`."
+            echo
+            echo "## Files"
+            echo
+            printf -- '- `%s`\n' "${FILES[@]##*/}"
+            echo
+            echo "## Installation"
+            echo
+            echo "- **Ubuntu 24.04 / 26.04:** \`sudo apt install ./ddd_${VERSION}-1_ubuntu<release>_amd64.deb\`"
+            echo "- **openSUSE Leap 16.0 / Tumbleweed:** \`sudo zypper install --allow-unsigned-rpm ./ddd-${VERSION}-1.<distribution>.x86_64.rpm\`"
+            echo "- **RHEL 10 and compatible (AlmaLinux, Rocky):** enable CRB and EPEL first"
+            echo "  (Motif and gnuplot come from there), then"
+            echo "  \`sudo dnf install ./ddd-${VERSION}-1.el10.x86_64.rpm\`"
+            echo "- **AppImage (any x86_64 Linux):** \`chmod +x DDD-${VERSION}-x86_64.AppImage\` and run it."
+            echo "  GDB is not included and must be installed on the system."
+            echo
+            echo "The \"Source code\" archives that GitHub adds automatically contain"
+            echo "the build workflows, not DDD."
+          } > release-notes.md
+
+          cat release-notes.md
+
+          # With assets given, gh creates the release as a draft, uploads
+          # everything, and only then publishes it.
+          gh release create "$TAG" \
+            --repo "$OWNER_REPO" \
+            --target "$GITHUB_SHA" \
+            --title "DDD ${VERSION}" \
+            --notes-file release-notes.md \
+            --latest \
+            "${FILES[@]}" SHA256SUMS
+
+          {
+            echo "Published release ${TAG} with ${#FILES[@]} package(s):"
+            printf -- '- %s\n' "${FILES[@]##*/}"
+          } >> "$GITHUB_STEP_SUMMARY"

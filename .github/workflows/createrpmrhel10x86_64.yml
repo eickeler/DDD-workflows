@@ -1,7 +1,16 @@
-name: Create nightly .rpm package for RHEL 10
+name: Create .rpm package for RHEL 10
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: DDD branch or tag to build
+        type: string
+        default: master
+      release:
+        description: Build release packages (version without +git suffix)
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -11,11 +20,17 @@ jobs:
   build:
     runs-on: ubuntu-24.04
 
+    defaults:
+      run:
+        shell: bash
+
     container:
       image: almalinux:10
 
     env:
       MIRROR_REPO: https://github.com/eickeler/DDD.git
+      REF: ${{ inputs.ref || 'master' }}
+      RELEASE: ${{ inputs.release && 'true' || 'false' }}
 
     steps:
       - name: Install repositories and build dependencies
@@ -68,11 +83,11 @@ jobs:
             gdb \
             gnuplot
 
-      - name: Checkout latest master
+      - name: Checkout DDD source
         run: |
           set -euo pipefail
 
-          git clone --depth 1 --branch master "$MIRROR_REPO" ddd
+          git clone --depth 1 --branch "$REF" "$MIRROR_REPO" ddd
           cd ddd
 
           # Upstream version from AC_INIT, e.g. 3.5.0 or 3.5.0-rcX.
@@ -87,9 +102,16 @@ jobs:
           PKG_BASE="$(tr '-' '~' <<< "$BASE_VERSION")"
 
           DATE="$(date +%Y%m%d)"
-          RPM_VERSION="${PKG_BASE}+git${DATE}"
-          PACKAGE_VERSION="${RPM_VERSION}+rhel10"
-          RPM_FILE="ddd-nightly-${DATE}_${PACKAGE_VERSION}_x86_64.rpm"
+
+          if [[ "$RELEASE" == true ]]; then
+            RPM_VERSION="${PKG_BASE}"
+            PACKAGE_VERSION="${RPM_VERSION}-1.el10"
+            RPM_FILE="ddd-${RPM_VERSION}-1.el10.x86_64.rpm"
+          else
+            RPM_VERSION="${PKG_BASE}+git${DATE}"
+            PACKAGE_VERSION="${RPM_VERSION}+rhel10"
+            RPM_FILE="ddd-nightly-${DATE}_${PACKAGE_VERSION}_x86_64.rpm"
+          fi
 
           {
             echo "COMMIT=$(git rev-parse HEAD)"
@@ -244,10 +266,23 @@ jobs:
 
           ddd --help
 
+          # The distribution's own (old) ddd must not count as an upgrade.
+          # dnf check-update exits 100 if updates are available.
+          rc=0
+          dnf -q check-update ddd || rc=$?
+          if (( rc == 100 )); then
+            echo "::error::dnf would replace this package with the distribution's ddd"
+            exit 1
+          elif (( rc != 0 )); then
+            echo "dnf check-update failed with exit code $rc" >&2
+            exit 1
+          fi
+
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v4
         with:
-          # Published by the central publish job in mirror.yml.
-          name: nightly-rpm-rhel10-x86_64
+          # Published by the publish job of the calling workflow
+          # (mirror.yml for nightlies, release.yml for releases).
+          name: package-rpm-rhel10-x86_64
           path: ${{ env.RPM_FILE }}
           if-no-files-found: error

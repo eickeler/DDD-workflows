@@ -1,7 +1,16 @@
-name: Create nightly AppImage for Linux x86_64
+name: Create AppImage for Linux x86_64
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: DDD branch or tag to build
+        type: string
+        default: master
+      release:
+        description: Build a release AppImage (version without -git suffix)
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -19,6 +28,8 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
       MIRROR_REPO: https://github.com/eickeler/DDD.git
       ARCH: x86_64
+      REF: ${{ inputs.ref || 'master' }}
+      RELEASE: ${{ inputs.release && 'true' || 'false' }}
 
     steps:
       - name: Install build dependencies
@@ -51,12 +62,12 @@ jobs:
             patchelf \
             desktop-file-utils
 
-      - name: Checkout latest master
+      - name: Checkout DDD source
         shell: bash
         run: |
           set -euo pipefail
 
-          git clone --depth 1 --branch master "$MIRROR_REPO" ddd
+          git clone --depth 1 --branch "$REF" "$MIRROR_REPO" ddd
           cd ddd
 
           # Upstream version from AC_INIT, e.g. 3.5.0 or 3.5.0-rcX.
@@ -67,8 +78,14 @@ jobs:
           fi
 
           DATE="$(date +%Y%m%d)"
-          VERSION="${BASE_VERSION}-git${DATE}"
-          APPIMAGE_FILE="ddd-nightly-${DATE}_${VERSION}_x86_64.AppImage"
+
+          if [[ "$RELEASE" == true ]]; then
+            VERSION="${BASE_VERSION}"
+            APPIMAGE_FILE="DDD-${VERSION}-x86_64.AppImage"
+          else
+            VERSION="${BASE_VERSION}-git${DATE}"
+            APPIMAGE_FILE="ddd-nightly-${DATE}_${VERSION}_x86_64.AppImage"
+          fi
 
           {
             echo "COMMIT=$(git rev-parse HEAD)"
@@ -208,7 +225,8 @@ jobs:
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          # Published by the central publish job in mirror.yml.
-          name: nightly-appimage-x86_64
+          # Published by the publish job of the calling workflow
+          # (mirror.yml for nightlies, release.yml for releases).
+          name: package-appimage-x86_64
           path: ${{ env.APPIMAGE_FILE }}
           if-no-files-found: error

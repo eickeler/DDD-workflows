@@ -53,6 +53,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # Published by the central publish job in mirror.yml.
-          name: nightly-tarball
+          name: package-tarball
           path: ddd-nightly-${{ env.DATE }}.tar.gz
           if-no-files-found: error

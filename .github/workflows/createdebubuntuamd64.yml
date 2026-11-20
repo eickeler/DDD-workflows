@@ -1,7 +1,16 @@
-name: Create nightly .deb package for Ubuntu 24.04/26.04
+name: Create .deb packages for Ubuntu 24.04/26.04
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: DDD branch or tag to build
+        type: string
+        default: master
+      release:
+        description: Build release packages (version without +git suffix)
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -33,6 +42,8 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
       MIRROR_REPO: https://github.com/eickeler/DDD.git
       DISTRO: ${{ matrix.distro }}
+      REF: ${{ inputs.ref || 'master' }}
+      RELEASE: ${{ inputs.release && 'true' || 'false' }}
 
     steps:
       - name: Install build dependencies
@@ -48,11 +59,11 @@ jobs:
 
 
 
-      - name: Checkout latest master
+      - name: Checkout DDD source
 
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch master "$MIRROR_REPO" ddd
+          git clone --depth 1 --branch "$REF" "$MIRROR_REPO" ddd
           cd ddd
 
           # Upstream version from AC_INIT, e.g. 3.5.0 or 3.5.0-rcX.
@@ -67,13 +78,26 @@ jobs:
           PKG_BASE="$(tr '-' '~' <<< "$BASE_VERSION")"
 
           DATE="$(date +%Y%m%d)"
-          VERSION="${PKG_BASE}+git${DATE}+${DISTRO}"
-          DEB_FILE="ddd-nightly-${DATE}_${VERSION}_amd64.deb"
+
+          if [[ "$RELEASE" == true ]]; then
+            # '~DISTRO' lets a future distribution package of the same
+            # upstream version (1:3.5.0-1) take precedence over ours.
+            VERSION="${PKG_BASE}-1~${DISTRO}"
+            DEB_FILE="ddd_${PKG_BASE}-1_${DISTRO}_amd64.deb"
+          else
+            VERSION="${PKG_BASE}+git${DATE}+${DISTRO}"
+            DEB_FILE="ddd-nightly-${DATE}_${VERSION}_amd64.deb"
+          fi
+
+          # Debian and Ubuntu ship ddd with epoch 1 (1:3.3.12-...).
+          # Without the same epoch, apt treats that old package as newer.
+          DEB_VERSION="1:${VERSION}"
 
           {
             echo "COMMIT=$(git rev-parse HEAD)"
             echo "DATE=$DATE"
             echo "VERSION=$VERSION"
+            echo "DEB_VERSION=$DEB_VERSION"
             echo "DEB_FILE=$DEB_FILE"
           } >> "$GITHUB_ENV"
 
@@ -137,7 +161,7 @@ jobs:
           # Create control file
           cat > debian/ddd/DEBIAN/control <<EOF
           Package: ddd
-          Version: ${VERSION}
+          Version: ${DEB_VERSION}
           Section: devel
           Priority: optional
           Architecture: amd64
@@ -166,10 +190,18 @@ jobs:
             grep -qx 'install ok installed'
           ddd --help
 
+          # The distribution's own (old) ddd must not count as an upgrade.
+          apt-cache policy ddd
+          if apt list --upgradable 2>/dev/null | grep -q '^ddd/'; then
+            echo "::error::apt would replace this package with the distribution's ddd"
+            exit 1
+          fi
+
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          # Published by the central publish job in mirror.yml.
-          name: nightly-deb-${{ matrix.distro }}
+          # Published by the publish job of the calling workflow
+          # (mirror.yml for nightlies, release.yml for releases).
+          name: package-deb-${{ matrix.distro }}
           path: ${{ env.DEB_FILE }}
           if-no-files-found: error

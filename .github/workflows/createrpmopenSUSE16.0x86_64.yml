@@ -1,7 +1,16 @@
-name: Create nightly .rpm packages for openSUSE
+name: Create .rpm packages for openSUSE
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        description: DDD branch or tag to build
+        type: string
+        default: master
+      release:
+        description: Build release packages (version without +git suffix)
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -10,6 +19,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+
+    defaults:
+      run:
+        shell: bash
 
     strategy:
       fail-fast: false
@@ -33,6 +46,8 @@ jobs:
       DISTRO: ${{ matrix.distro }}
       PACKAGE_SUFFIX: ${{ matrix.package_suffix }}
       DISTRO_TITLE: ${{ matrix.title }}
+      REF: ${{ inputs.ref || 'master' }}
+      RELEASE: ${{ inputs.release && 'true' || 'false' }}
 
     steps:
       - name: Install build dependencies
@@ -48,11 +63,11 @@ jobs:
             libXmu-devel libXft-devel freetype2-devel fontconfig-devel \
             ncurses-devel tinyxml2-devel
 
-      - name: Checkout latest master
+      - name: Checkout DDD source
         run: |
           set -euo pipefail
 
-          git clone --depth 1 --branch master "$MIRROR_REPO" ddd
+          git clone --depth 1 --branch "$REF" "$MIRROR_REPO" ddd
           cd ddd
 
           # Upstream version from AC_INIT, e.g. 3.5.0 or 3.5.0-rcX.
@@ -67,9 +82,16 @@ jobs:
           PKG_BASE="$(tr '-' '~' <<< "$BASE_VERSION")"
 
           DATE="$(date +%Y%m%d)"
-          VERSION="${PKG_BASE}+git${DATE}"
-          PACKAGE_VERSION="${VERSION}+${PACKAGE_SUFFIX}"
-          RPM_FILE="ddd-nightly-${DATE}_${PACKAGE_VERSION}_x86_64.rpm"
+
+          if [[ "$RELEASE" == true ]]; then
+            VERSION="${PKG_BASE}"
+            PACKAGE_VERSION="${VERSION}-1.${DISTRO}"
+            RPM_FILE="ddd-${VERSION}-1.${PACKAGE_SUFFIX}.x86_64.rpm"
+          else
+            VERSION="${PKG_BASE}+git${DATE}"
+            PACKAGE_VERSION="${VERSION}+${PACKAGE_SUFFIX}"
+            RPM_FILE="ddd-nightly-${DATE}_${PACKAGE_VERSION}_x86_64.rpm"
+          fi
 
           {
             echo "COMMIT=$(git rev-parse HEAD)"
@@ -201,10 +223,19 @@ jobs:
 
           ddd --help
 
+          # The distribution's own (old) ddd must not count as an upgrade.
+          if zypper --non-interactive list-updates |
+               grep -qE '\|[[:space:]]*ddd[[:space:]]*\|'; then
+            zypper --non-interactive info ddd || true
+            echo "::error::zypper would replace this package with the distribution's ddd"
+            exit 1
+          fi
+
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          # Published by the central publish job in mirror.yml.
-          name: nightly-rpm-${{ matrix.distro }}
+          # Published by the publish job of the calling workflow
+          # (mirror.yml for nightlies, release.yml for releases).
+          name: package-rpm-${{ matrix.distro }}
           path: ${{ env.RPM_FILE }}
           if-no-files-found: error

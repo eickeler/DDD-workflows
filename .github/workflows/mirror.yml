@@ -171,7 +171,7 @@ jobs:
           git remote add github "https://x-access-token:${PAT}@github.com/${{ env.TARGET }}.git"
           git push --mirror github
 
-  # The builders only upload artifacts named nightly-*.
+  # The builders only upload artifacts named package-*.
   # All publishing happens in the publish job below.
   tarball:
     needs: mirror
@@ -224,7 +224,7 @@ jobs:
       - name: Download all nightly artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: nightly-*
+          pattern: package-*
           path: dist
           merge-multiple: true
 
