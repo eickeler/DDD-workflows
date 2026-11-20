@@ -15,7 +15,7 @@ jobs:
     outputs:
       changed: ${{ steps.check.outputs.changed }} 
     env:
-      UPSTREAM: https://https.https.git.savannah.gnu.org/git/ddd.git
+      UPSTREAM: https://https.git.savannah.gnu.org/git/ddd.git
       TARGET: eickeler/DDD
       GIT_TERMINAL_PROMPT: "0"
 
